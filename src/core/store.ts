@@ -8,6 +8,7 @@ export interface WindowState {
   width: number;
   height: number;
   velocity: { x: number; y: number };
+  sphereOffset?: { x: number; y: number };
 }
 
 export interface AppState {
@@ -60,7 +61,8 @@ export const useStore = create<AppState>((set) => ({
     y: window.screenY,
     width: window.innerWidth,
     height: window.innerHeight,
-    velocity: { x: 0, y: 0 }
+    velocity: { x: 0, y: 0 },
+    sphereOffset: { x: 0, y: 0 }
   },
   otherWindows: {},
   setMyWindow: (data) => set((state) => ({ myWindow: { ...state.myWindow, ...data } })),

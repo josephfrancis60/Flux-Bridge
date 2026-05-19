@@ -10,6 +10,7 @@ import noiseShader from '../shaders/noise.glsl?raw';
 const EnergySphere = () => {
   const outerMatRef = useRef<THREE.ShaderMaterial>(null);
   const innerMatRef = useRef<THREE.ShaderMaterial>(null);
+  const groupRef = useRef<THREE.Group>(null);
   const { viewport } = useThree();
   
   const { seed, index, fixIteration } = useStore();
@@ -43,6 +44,11 @@ const EnergySphere = () => {
 
   const connectionProgressRef = useRef(0);
 
+  // DRAG PHYSICS STATE (HIGH INERTIA / LESS FRICTION SPRING SIMULATION)
+  const lastWindowPos = useRef({ x: window.screenX, y: window.screenY });
+  const sphereOffset = useRef(new THREE.Vector3(0, 0, 0));
+  const sphereVelocity = useRef(new THREE.Vector3(0, 0, 0));
+
   useFrame((state, delta) => {
     if (!outerMatRef.current || !innerMatRef.current) return;
     
@@ -54,14 +60,77 @@ const EnergySphere = () => {
     const store = useStore.getState();
     const my = store.myWindow;
     
-    const vx = my.velocity.x * 0.01;
-    const vy = -my.velocity.y * 0.01;
+    // Scale viewport conversions
+    const scale = viewport.height / window.innerHeight;
+
+    // --- DRAG PHYSICS (INERTIA + SPRING PULL-BACK) ---
+    const currentX = window.screenX;
+    const currentY = window.screenY;
+    
+    // Difference in window's screen coordinates
+    const dx = currentX - lastWindowPos.current.x;
+    const dy = currentY - lastWindowPos.current.y;
+    
+    lastWindowPos.current.x = currentX;
+    lastWindowPos.current.y = currentY;
+
+    // Convert screen drag delta to Three.js viewport space
+    const deltaX = dx * scale;
+    const deltaY = -dy * scale; // screen Y increases down, Three.js Y increases up
+
+    // Lag behind: shift the sphere's local position in the opposite direction of window movement
+    sphereOffset.current.x -= deltaX;
+    sphereOffset.current.y -= deltaY;
+
+    // Physics parameters for high inertia (slow acceleration/damping) and low friction
+    const k = 4.0;   // Spring constant (restoring pull force)
+    const c = 0.45;  // Damping coefficient (friction - lower value = more glide/oscillation)
+    const m = 1.0;   // Mass (inertia)
+
+    // Spring-mass-damper system: F = -k*x - c*v
+    const forceX = -k * sphereOffset.current.x - c * sphereVelocity.current.x;
+    const forceY = -k * sphereOffset.current.y - c * sphereVelocity.current.y;
+
+    const ax = forceX / m;
+    const ay = forceY / m;
+
+    // Cap delta time to prevent giant leaps on frame drops
+    const dt = Math.min(delta, 0.05);
+
+    sphereVelocity.current.x += ax * dt;
+    sphereVelocity.current.y += ay * dt;
+
+    sphereOffset.current.x += sphereVelocity.current.x * dt;
+    sphereOffset.current.y += sphereVelocity.current.y * dt;
+
+    // Boundary limit to keep sphere inside viewport bounds safely
+    const maxOffsetDist = 3.2;
+    const offsetLen = Math.hypot(sphereOffset.current.x, sphereOffset.current.y);
+    if (offsetLen > maxOffsetDist && offsetLen > 0) {
+      sphereOffset.current.x = (sphereOffset.current.x / offsetLen) * maxOffsetDist;
+      sphereOffset.current.y = (sphereOffset.current.y / offsetLen) * maxOffsetDist;
+      sphereVelocity.current.multiplyScalar(0.7); // lose some speed on boundaries
+    }
+
+    // Apply the computed lag offset to the group containing the spheres
+    if (groupRef.current) {
+      groupRef.current.position.set(sphereOffset.current.x, sphereOffset.current.y, 0);
+    }
+
+    // Pass the sphere's active relative velocity to the shader for the visual trailing stretch
+    // We scale this to make the stretch highly prominent and liquid
+    const vx = sphereVelocity.current.x * 0.15;
+    const vy = sphereVelocity.current.y * 0.15;
     outerMatRef.current.uniforms.uVelocity.value.set(vx, vy, 0);
     innerMatRef.current.uniforms.uVelocity.value.set(vx, vy, 0);
 
+    // Save my physical sphere offset back to Zustand so the partner window knows our exact coordinates
+    store.setMyWindow({
+      sphereOffset: { x: sphereOffset.current.x, y: sphereOffset.current.y }
+    });
+
     const myCX = my.x + my.width / 2;
     const myCY = my.y + my.height / 2;
-    const scale = viewport.height / window.innerHeight;
     
     const globalX = myCX * scale;
     const globalY = -myCY * scale;
@@ -101,10 +170,17 @@ const EnergySphere = () => {
       const dx_world = dx_px * scale;
       const dy_world = dy_px * scale;
 
-      outerMatRef.current.uniforms.uOtherPos.value.set(dx_world, -dy_world, 0);
+      // Extract the other sphere's lag offset from state (sync)
+      const otherSphereOffset = closest.sphereOffset || { x: 0, y: 0 };
+
+      // Calculate vector between actual physically shifted spheres
+      const finalOtherX = dx_world + otherSphereOffset.x - sphereOffset.current.x;
+      const finalOtherY = -dy_world + otherSphereOffset.y - sphereOffset.current.y;
+
+      outerMatRef.current.uniforms.uOtherPos.value.set(finalOtherX, finalOtherY, 0);
       outerMatRef.current.uniforms.uHasOther.value = 1.0;
       
-      innerMatRef.current.uniforms.uOtherPos.value.set(dx_world, -dy_world, 0);
+      innerMatRef.current.uniforms.uOtherPos.value.set(finalOtherX, finalOtherY, 0);
       innerMatRef.current.uniforms.uHasOther.value = 1.0;
     } else {
       outerMatRef.current.uniforms.uHasOther.value = 0.0;
@@ -113,7 +189,7 @@ const EnergySphere = () => {
   });
 
   return (
-    <group>
+    <group ref={groupRef}>
       {/* Outer Shell */}
       <mesh>
         <sphereGeometry args={[1.5, 96, 96]} />

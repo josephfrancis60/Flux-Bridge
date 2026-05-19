@@ -29,8 +29,9 @@ void main() {
       
       float distToOther = length(uOtherPos);
       if (distToOther > 0.0) {
-          vec3 preGlobal = position + uGlobalOffset;
-          float waveFlow = (preGlobal.x + preGlobal.y) * 0.5 - uTime * 3.0;
+          // Stable wave flowing along the bridge direction using local coordinates
+          float distAlongAxis = dot(position, dirToOther);
+          float waveFlow = distAlongAxis * 1.5 - uTime * 3.0;
           float wave = sin(waveFlow) * 0.5 + 0.5;
           
           float stretchFactor = uIsCore > 0.5 ? 0.1 : 0.5;
@@ -40,8 +41,8 @@ void main() {
       }
   }
   
-  vec3 globalBase = newPos + uGlobalOffset;
-  float n = fbm(globalBase * 2.0 + uTime * 0.5);
+  // Smooth cosmic waves displacement calculated in local space
+  float n = fbm(newPos * 1.5 + vec3(0.0, uTime * 0.35, 0.0));
   
   vec3 dispDir = normal;
   if (uHasOther > 0.5) {
@@ -53,23 +54,23 @@ void main() {
       dispDir = normalize(mix(normal, outward, pull));
   }
   
-  float coreFactor = uIsCore > 0.5 ? 0.1 : 0.3;
+  float coreFactor = uIsCore > 0.5 ? 0.08 : 0.25;
   newPos += dispDir * (n * coreFactor);
   
-  // Crazy elasticity for dragging
+  // Physical elasticity driven by our sphere velocity
   float velMag = length(uVelocity);
   if (velMag > 0.0) {
       vec3 velDir = normalize(uVelocity);
       float dotVel = dot(normal, velDir);
       
-      // Increased scaling factor so extreme momentum causes massive trailing stretching
-      float visualVel = min(velMag * 0.003, 3.0);
+      // visual velocity stretch factor
+      float visualVel = min(velMag * 0.45, 3.0);
       float stretchAmount = (dotVel + 1.0) * 0.5; 
       
-      // High-speed ripples travelling along the mass
-      float ripple = sin(dotVel * 12.0 - uTime * 20.0) * visualVel * 0.15;
+      // Gentle, trailing ripples along the direction of physical travel
+      float ripple = sin(dotVel * 10.0 - uTime * 15.0) * visualVel * 0.12;
       
-      newPos -= velDir * stretchAmount * visualVel * (uIsCore > 0.5 ? 0.2 : 0.8);
+      newPos -= velDir * stretchAmount * visualVel * (uIsCore > 0.5 ? 0.25 : 0.85);
       newPos += normal * ripple;
   }
 
